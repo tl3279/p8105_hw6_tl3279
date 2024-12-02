@@ -5,13 +5,17 @@ date: "2024-12-02"
 output: github_document
 ---
 
-```{r message = FALSE}
+```{r setup, message = FALSE, warning = FALSE}
 library(tidyverse)
+library(modelr)
+library(mgcv)
+library(SemiPar)
+set.seed(1)
 ```
 
 ## Problem 1
 
-```{r message = FALSE}
+```{r, message = FALSE}
 weather_df = 
   rnoaa::meteo_pull_monitors(
     c("USW00094728"),
@@ -122,7 +126,7 @@ baltimore_test |>
 ```
 
 For each cities
-```{r}
+```{r, warning = FALSE}
 city_tests <- 
   homicide_df |>
   group_by(city_state) |>
@@ -149,7 +153,7 @@ city_tests |>
 Plot estimated ORs and CIs
 ```{r, fig.width=8, fig.height=8}
 city_tests |>
-  ggplot(aes(x = reorder(city_state,OR), y = OR)) +
+  ggplot(aes(x = reorder(city_state,desc(OR)), y = OR)) +
   geom_point() +
   geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.25, color = "darkgray") +
   labs(
@@ -159,4 +163,106 @@ city_tests |>
   coord_flip() +
   theme_minimal()
 ```
+
+## Problem 3
+
+Load the dataset and clean it
+```{r message = FALSE}
+bw_df = 
+  read_csv("birthweight.csv") |>
+  janitor::clean_names() |>
+  mutate(
+    babysex = factor(babysex, levels = c(1, 2), 
+                     labels = c("Male", "Female")),
+    malform = factor(malform, levels = c(0, 1), 
+                     labels = c("Absent", "Present")),
+    frace = factor(frace, levels = c(1, 2, 3, 4, 8, 9), 
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other", "Unknown")),
+    mrace = factor(mrace, levels = c(1, 2, 3, 4, 8), 
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other"))
+  )
+
+```
+
+Modeling Process   
+Data Cleaning: Variable names were cleaned. Meaningful labels were created for 
+factor variables (e.g., babysex, malform) rather than numbers. No missing values 
+in the dataset.
+
+```{r}
+bw_model = 
+  lm(
+  bwt ~ babysex + bhead + blength + fincome + frace + gaweeks + malform + momage  + ppbmi + smoken + wtgain, data = bw_df
+  )
+```
+
+Variables were chosen based on the hypothesized biological and socio-economic 
+factors influencing birth weight. My proposed model for birthweight includes the 
+following variables: babysex, bhead, blength, fincome, frace, gaweeks, malform, 
+momage, ppbmi, smoken, wtgain. Variables like bhead, blength,
+and gaweeks directly measure or predict the baby’s growth, making them essential 
+for modeling birth weight. Variables like fincome and frace provide insight into 
+socio-economic factors that indirectly affect birthweight. Pre-pregnancy BMI, 
+and weight gain during pregnancy are key indicators of maternal health and 
+directly influence fetal growth.Previous complications increase the risk of 
+similar outcomes. These variables are all predictive of birthweight.
+
+Plot residuals vs fitted values
+```{r}
+bw_df =
+  bw_df |>
+  modelr::add_predictions(bw_model) |>
+  modelr::add_residuals(bw_model)
+bw_df |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point() +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals"
+  ) +
+  theme_minimal()
+```
+
+Model comparison
+```{r}
+cv_df = 
+  crossv_mc(bw_df, 100) |>
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  ) |>
+  mutate(
+    bw_mod = map(train, \(x) lm(bwt ~ babysex + bhead + blength + fincome + frace + gaweeks + malform + momage  + ppbmi + smoken + wtgain, data = x)),
+    model1 = map(train, \(x) lm(bwt ~ blength + gaweeks, data = x)),
+    model2 = map(train, \(x) lm(bwt ~ bhead * blength * babysex, data = x))
+  ) |>
+  mutate(
+    rmse_bw = map2_dbl(bw_mod, test, rmse),
+    rmse_1 = map2_dbl(model1, test, rmse),
+    rmse_2 = map2_dbl(model2, test, rmse)
+  )
+
+cv_df |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) |>
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin()
+```
+
+Model 1 uses only blength and gaweeks as predictors and has the highest RMSE, 
+indicating it is the least accurate among the three models. Only including two 
+variables in the model likely to oversimplify the relationship.
+
+The interaction model performs better than Model 1, as shown by its lower RMSE.
+Including interactions between bhead, blength, and babysex adds complexity and 
+captures additional variability in birthweight.
+
+The model proposed by myself has the lowest RMSE, suggesting consistent 
+performance across cross-validation folds. It performs best likely because 
+it incorporates a mix of biological, maternal, and socioeconomic predictors.
 
